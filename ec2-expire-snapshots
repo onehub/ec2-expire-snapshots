@@ -679,7 +679,19 @@ This is not a normal EBS snapshot expiration strategy, but is a
 convenience option for use when throwing away all data associated with
 an EBS volume that is no longer useful for any purpose.
 
-=back
+=item C<--filter> 
+
+Instead of volumes being specified, 'volume ids' are interpreted as filter clauses
+that AWS understands for DescribeSnapshots. See
+https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSnapshots.html
+for filter parameters. You can use this option to find snapshots that are 
+tagged in a particular way, for example:
+
+--filter tag-value=db-production-daily-snap
+
+Would find all of your own snapshots that are tagged with db-production-daily-snap
+regardless of which volume they use. If you specify the flag, but provide no
+filter, all of your own snapshots will be returned. 
 
 =head1 ARGUMENTS
 
@@ -913,13 +925,6 @@ that AWS understands for DescribeSnapshots. See
 https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSnapshots.html
 for filter parameters. You can use this option to find snapshots that are 
 tagged in a particular way, for example:
-
---filter tag-value=db-production-daily-snap
-
-Would find all of your own snapshots that are tagged with db-production-daily-snap
-regardless of which volume they use. If you specify the flag, but provide no
-filter, all of your own snapshots will be returned. 
-
 
 =head2 BACKGROUND
 
