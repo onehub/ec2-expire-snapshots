@@ -31,6 +31,7 @@ my $region                     = undef;
 my $ec2_endpoint               = undef;
 my $volume_id_in_tag           = undef;
 my $delete_delay               = undef;
+my $by_filter                  = undef;
 
 my $force_delete_all           = undef;
 my $keep_first_yearly          = undef;
@@ -51,7 +52,7 @@ GetOptions(
   'd|debug'                       => \$Debug,
   'q|quiet'                       => \$Quiet,
   'n|noaction'                    => \$Noaction,
-  'ec2debug'                     => \$EC2Debug,
+  'ec2debug'                      => \$EC2Debug,
 
   'aws-access-key-id=s'          => \$aws_access_key_id,
   'aws-secret-access-key=s'      => \$aws_secret_access_key,
@@ -73,6 +74,7 @@ GetOptions(
   'keep-all-since=s'             => \$keep_all_since,
   'expiration-tag-name=s'        => \$expiration_tag_name,
   'expiration-tag-optional'      => \$expiration_tag_optional,
+  'filter'                       => \$by_filter,
 ) or pod2usage(2);
 
 my $filesystem_frozen = 0;
@@ -108,7 +110,7 @@ my $constraints = {
 );
 die "$Prog: ERROR: Can't find AWS access key or secret access key"
   unless $use_iam_role or ($aws_access_key_id and $aws_secret_access_key);
-$Debug and warn "$Prog: Using AWS access key: $aws_access_key_id\n";
+  $Debug and warn "$Prog: Using AWS access key: $aws_access_key_id\n";
 
 my $ec2 = Net::Amazon::EC2->new(
     ((! $use_iam_role) ? (AWSAccessKeyId  => $aws_access_key_id,) : () ),
@@ -117,10 +119,23 @@ my $ec2 = Net::Amazon::EC2->new(
     # ($Debug ? (debug => 1) : ()),
   );
 
-my $snapshots_for_volumes = snapshots_for_volumes($ec2,$volume_id_in_tag,@volume_ids);
-for my $volume_id ( @volume_ids ) {
-    expire_snapshots_for_volume($ec2, $volume_id,
-                                $snapshots_for_volumes->{$volume_id},
+my $snapshots_for_volumes;
+
+if (!defined($by_filter)) {
+    $snapshots_for_volumes = snapshots_for_volumes($ec2,$volume_id_in_tag,@volume_ids);
+    for my $volume_id ( @volume_ids ) {
+	expire_snapshots_for_volume($ec2, $volume_id,
+                               $snapshots_for_volumes->{$volume_id},
+                                $constraints);
+    }
+}
+else {
+    my @filter_specs = @volume_ids;
+    my $filter_name = "(Filter: " . join(" ",@volume_ids) . ")";
+    my $snapshots_aggregated = snapshots_by_filter($ec2,$filter_name, @filter_specs);
+
+    expire_snapshots_for_volume($ec2, $filter_name,
+                               $snapshots_aggregated->{$filter_name},
                                 $constraints);
 }
 
@@ -189,6 +204,36 @@ sub snapshots_for_volumes {
     my %snapshots_for_volumes;
     foreach my $snapshot (@$snapshots) {
       push @{$snapshots_for_volumes{$snapshot->volume_id}}, $snapshot;
+    }
+
+    return \%snapshots_for_volumes;
+}
+
+# Return snapshots for a filter
+sub snapshots_by_filter {
+    my ($ec2,$filter_name, @filter_specs) = @_;
+
+    my @filters;
+
+    foreach my $filter_spec (@filter_specs) {
+	my @tuple = split(/\=/, $filter_spec, 2);
+	push @filters, \@tuple;
+    }
+
+    $Debug and warn "$Prog: Retrieving snapshot list\n";
+    my $snapshots;
+    eval {
+	my %criteria = (Owner => "self");
+        $snapshots = $ec2->describe_snapshots((%criteria , (@filters ? (Filter => \@filters) : ())));
+    };
+
+    if ( $@  ){
+        die "$Prog: ERROR: describe_snapshots: ", ec2_error_message($@);
+    }
+
+    my %snapshots_for_volumes;
+    foreach my $snapshot (@$snapshots) {
+      push @{$snapshots_for_volumes{$filter_name}}, $snapshot;
     }
 
     return \%snapshots_for_volumes;
@@ -861,6 +906,20 @@ inadvertently deleted in the event you need to undo some recent work.
 Then, you could add in some optional expiration tags that can be set
 to override normal expiration and preserve for a longer time period
 any special EBS snapshots that you care to flag from time to time.
+
+=item C<--filter> 
+Instead of volumes being specified, 'volume ids' are interpreted as filter clauses
+that AWS understands for DescribeSnapshots. See
+https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSnapshots.html
+for filter parameters. You can use this option to find snapshots that are 
+tagged in a particular way, for example:
+
+--filter tag-value=db-production-daily-snap
+
+Would find all of your own snapshots that are tagged with db-production-daily-snap
+regardless of which volume they use. If you specify the flag, but provide no
+filter, all of your own snapshots will be returned. 
+
 
 =head2 BACKGROUND
 
